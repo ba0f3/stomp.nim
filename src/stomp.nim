@@ -1,4 +1,4 @@
-# vim: set et nosta sw=4 ts=4 ft=nim : 
+# vim: set et nosta sw=4 ts=4 ft=nim :
 #
 # Copyright (c) 2016-2019, Mahlon E. Smith <mahlon@martini.nu>
 # All rights reserved.
@@ -48,6 +48,16 @@
 ## This library has been tested with recent versions of RabbitMQ.  If it
 ## works for you with another broker, please let the author know.
 ##
+##
+## Protocol support
+## ----------------
+##
+## Examples
+## =========
+##
+## Connecting with SSL
+## -------------------
+##
 
 import
     strutils,
@@ -58,7 +68,7 @@ import
     uri
 
 const
-    VERSION = "0.1.2" ## The current program version.
+    VERSION = "0.1.1" ## The current program version.
     NULL    = "\x00"  ## The NULL character.
     CR      = "\r"    ## The carriage return character.
     CRLF    = "\r\n"  ## Carriage return + Line feed (EOL).
@@ -230,7 +240,6 @@ proc `[]`*( response: StompResponse, key: string ): string =
     for header in response.headers:
         if cmpIgnoreCase( key, header.name ) == 0:
             return header.value
-    return ""
 
 
 #-------------------------------------------------------------------
@@ -281,11 +290,9 @@ proc newStompClient*( s: Socket, uri: string ): StompClient =
     ##    sslContext.wrapSocket(socket)
     ##    var stomp = newStompClient( socket, "stomp+ssl://test:test@example.com/%2Fvhost" )
     ##
-
     let
-        uri   = parse_uri( uri )
-        vhost = if uri.path.len > 1: uri.path.strip( chars = {'/'}, trailing = false ) else: uri.path
-
+      uri = parse_uri( uri )
+      vhost = if uri.path.len > 1: uri.path.strip(chars = {'/'}, trailing = false) else: uri.path
     new( result )
     result.socket        = s
     result.connected     = false
@@ -348,14 +355,14 @@ proc `[]`*( c: StompClient, key: string ): string =
     for header in c.serverinfo:
         if cmpIgnoreCase( key, header.name ) == 0:
             return header.value
-    return ""
 
 
 proc `$`*( c: StompClient ): string =
     ## Represent the stomp client as a string, after masking the password.
     let uri = ( $c.uri ).replace( ":" & c.uri.password & "@", "@" )
     result = "(NimStomp v" & VERSION & ( if c.connected: " connected" else: " not connected" ) & " to " & uri
-    if not ( c[ "server" ] == "" ): result.add( " --> " & c["server"] )
+    if c[ "server" ].len != 0:
+        result.add( " --> " & c["server"] )
     result.add( ")" )
 
 
@@ -421,10 +428,10 @@ proc add_txn( c: StompClient ): void =
 
 
 proc send*( c: StompClient,
-            destination: string,
-            message:     string = "",
-            contenttype: string = "",
-            headers:     seq[ tuple[name: string, value: string] ] = @[] ): void =
+            destination : string,
+            message     = "",
+            contenttype = "",
+            headers     : seq[ tuple[name: string, value: string] ] = @[] ): void =
     ## Send a **message** to **destination**.
     ##
     ## A Content-Length header is automatically and always included.
@@ -439,7 +446,7 @@ proc send*( c: StompClient,
     c.socksend( "SEND" & CRLF )
     c.socksend( "destination:" & destination & CRLF )
     c.socksend( "content-length:" & $message.len & CRLF )
-    if not ( contenttype == "" ): c.socksend( "content-type:" & contenttype & CRLF )
+    if contenttype.len != 0: c.socksend( "content-type:" & contenttype & CRLF )
 
     # Add custom headers.  Add transaction header if one isn't manually
     # present (and a transaction is open.)
@@ -450,7 +457,7 @@ proc send*( c: StompClient,
         c.socksend( header.name & ":" & header.value & CRLF )
     if not txn_seen: c.add_txn
 
-    if message == "":
+    if message.len == 0:
         c.finmsg
     else:
         c.socket.send( CRLF & message & NULL )
@@ -460,8 +467,8 @@ proc send*( c: StompClient,
 proc subscribe*( c: StompClient,
             destination: string,
             ack        = "auto",
-            id:        string = "",
-            headers:   seq[ tuple[name: string, value: string] ] = @[] ): void =
+            id         = "",
+            headers:     seq[ tuple[name: string, value: string] ] = @[] ): void =
     ## Subscribe to messages at **destination**.
     ##
     ## Setting **ack** to "client" or "client-individual" enables client ACK/NACK mode.
@@ -474,12 +481,10 @@ proc subscribe*( c: StompClient,
     if not c.connected: raise newException( StompError, "Client is not connected." )
     c.socksend( "SUBSCRIBE" & CRLF )
     c.socksend( "destination:" & destination & CRLF )
-
-    if id == "":
+    if id.len == 0:
         c.socksend( "id:" & $c.subscriptions.len & CRLF )
     else:
         c.socksend( "id:" & id & CRLF )
-
     if ack == "client" or ack == "client-individual":
         c.socksend( "ack:" & ack & CRLF )
     else:
@@ -526,11 +531,11 @@ proc begin*( c: StompClient, txn: string ): void =
     c.transactions.add( txn )
 
 
-proc commit*( c: StompClient, txn: string = "" ): void =
+proc commit*( c: StompClient, txn = ""): void =
     ## Finish a specific transaction **txn**, or the most current if unspecified.
     var transaction = txn
-    if transaction == "" and c.transactions.len > 0: transaction = c.transactions.pop
-    if transaction == "": return
+    if transaction.len == 0 and c.transactions.len > 0: transaction = c.transactions.pop
+    if transaction.len == 0: return
 
     c.socksend( "COMMIT" & CRLF )
     c.socksend( "transaction:" & transaction & CRLF )
@@ -544,11 +549,11 @@ proc commit*( c: StompClient, txn: string = "" ): void =
     c.transactions = new_transactions
 
 
-proc abort*( c: StompClient, txn: string = "" ): void =
+proc abort*( c: StompClient, txn = ""): void =
     ## Cancel a specific transaction **txn**, or the most current if unspecified.
     var transaction = txn
-    if transaction == "" and c.transactions.len > 0: transaction = c.transactions.pop
-    if transaction == "": return
+    if transaction.len == 0 and c.transactions.len > 0: transaction = c.transactions.pop
+    if transaction.len == 0: return
 
     c.socksend( "ABORT" & CRLF )
     c.socksend( "transaction:" & transaction & CRLF )
@@ -562,20 +567,20 @@ proc abort*( c: StompClient, txn: string = "" ): void =
     c.transactions = new_transactions
 
 
-proc ack*( c: StompClient, id: string, transaction: string = "" ): void =
+proc ack*( c: StompClient, id: string, transaction = "" ): void =
     ## Acknowledge message **id**.  Optionally, attach this acknowledgement
     ## to a specific **transaction** -- if there's only one active, it is
     ## added automatically.
     c.socksend( "ACK" & CRLF )
     c.socksend( "id:" & id & CRLF )
-    if not ( transaction == "" ):
+    if transaction.len != 0:
         c.socksend( "transaction:" & transaction & CRLF )
     else:
         c.add_txn
     c.finmsg
 
 
-proc nack*( c: StompClient, id: string, transaction: string = "" ): void =
+proc nack*( c: StompClient, id: string, transaction = "" ): void =
     ## Reject message **id**.  Optionally, attach this rejection to a
     ## specific **transaction** -- if there's only one active, it is
     ## added automatically.
@@ -584,14 +589,14 @@ proc nack*( c: StompClient, id: string, transaction: string = "" ): void =
     ## on error:
     ##
     ## .. code-block:: nim
-    ##    
+    ##
     ##  stomp.subscribe( "/queue/test", "client-individual" )
     ##  FIXME: attach procs
     ##  stomp.wait_for_messages
     ##
     c.socksend( "NACK" & CRLF )
     c.socksend( "id:" & id & CRLF )
-    if not ( transaction == "" ):
+    if transaction.len != 0:
         c.socksend( "transaction:" & transaction & CRLF )
     else:
         c.add_txn
@@ -618,7 +623,7 @@ proc wait_for_messages*( c: StompClient, loop=true ) =
         else:
             timeout = -1
 
-        if select_read( fds, timeout ) == 0: # timeout, only happens if heartbeating missed
+        if selectRead( fds, timeout ) == 0: # timeout, only happens if heartbeating missed
             if not isNil( c.missed_heartbeat_callback ):
                 c.missed_heartbeat_callback( c )
             else:
@@ -670,14 +675,14 @@ proc wait_for_messages*( c: StompClient, loop=true ) =
 #   ./stomp publisher [stomp-uri] [publish-destination]
 #
 # An example with an AMQP "direct" exchange, and an exclusive queue:
-#   ./stomp publisher stomp://test:test@localhost/%2F?heartbeat=10 /exchange/test
-#   ./stomp receiver  stomp://test:test@localhost/%2F?heartbeat=10 /exchange/test
+#   ./stomp publisher stomp://test:test@localhost/?heartbeat=10 /exchange/test
+#   ./stomp receiver  stomp://test:test@localhost/?heartbeat=10 /exchange/test
 #
 # Then just let 'er run.
 #
-# You can also run a naive benchmark (deliveries/sec):
+# You can also run a nieve benchmark (deliveries/sec):
 #
-#   ./stomp benchmark stomp://test:test@localhost%2F /exchange/test
+#   ./stomp benchmark stomp://test:test@localhost/ /exchange/test
 #
 # It will set messages to require acknowledgement, and nack everything, causing
 # a delivery loop for 10 seconds.
@@ -688,30 +693,7 @@ when isMainModule:
         socket   = newSocket()
         messages: seq[ StompResponse ] = @[]
 
-    let usage = """
-First start up a message receiver:
-  ./stomp receiver [stomp-uri] [subscription-destination]
-
-then run another process, to publish stuff:
-  ./stomp publisher [stomp-uri] [publish-destination]
-
-An example with an AMQP "direct" exchange, and an exclusive queue:
-  ./stomp publisher stomp://test:test@localhost/%2F?heartbeat=10 /exchange/test
-  ./stomp receiver  stomp://test:test@localhost/%2F?heartbeat=10 /exchange/test
-
-Then just let 'er run.
-
-You can also run a naive benchmark (deliveries/sec):
-
-  ./stomp benchmark stomp://test:test@localhost/%2F /exchange/test
-
-It will set messages to require acknowledgement, and nack everything, causing
-a delivery loop for 10 seconds.
-If your vhost requires slashes, use URI escaping: /%2Ftest
-"""
-
-
-    if paramCount() != 3: quit usage
+    if paramCount() != 3: quit "See source comments for how to run functional tests."
 
     var stomp = newStompClient( socket, paramStr(2) )
     stomp.connect
@@ -732,7 +714,7 @@ If your vhost requires slashes, use URI escaping: /%2Ftest
             stomp.message_callback = incr
             stomp.subscribe( paramStr(3), "client" )
             stomp.send( paramStr(3), "hi." )
-            while get_time() < start + 10.seconds:
+            while get_time() - start < 10:
                 stomp.wait_for_messages( false )
 
             printf "* Processed %d messages in 10 seconds.\n", count
@@ -768,7 +750,7 @@ If your vhost requires slashes, use URI escaping: /%2Ftest
             # Assertions on the results!
             #
             doAssert( messages.len == expected )
-            doAssert( messages[0].payload == "" )
+            doAssert( messages[0].payload == nil )
 
             doAssert( messages[1].payload == "Hello world!" )
 
@@ -852,7 +834,7 @@ If your vhost requires slashes, use URI escaping: /%2Ftest
                 headers = @[]
                 headers.add( ("transaction", "test-" & $i ) )
                 stomp.begin( "test-" & $i )
-                stomp.send( paramStr(3), "transaction " & $i, "", headers )
+                stomp.send( paramStr(3), "transaction " & $i, nil, headers )
                 sleep 500
             stomp.abort( "test-1" )
             sleep 500
@@ -865,5 +847,4 @@ If your vhost requires slashes, use URI escaping: /%2Ftest
             echo "* Tests passed!"
 
         else:
-            quit usage
-
+            quit "See source comments for how to run functional tests."
